@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heap-oom
+  labels:
+    app: heap-oom
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: heap-oom
+  template:
+    metadata:
+      labels:
+        app: heap-oom
+    spec:
+      containers:
+        - name: heap-oom
+          image: "quay.io/causa-ai-hub/quarkus-heap-oom:latest"
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          env:
+            - name: JAVA_OPTS
+              value: "-XX:+HeapDumpOnOutOfMemoryError"
+          ports:
+            - containerPort: 8080
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: heap-oom-service
+  labels:
+    app: heap-oom
+spec:
+  selector:
+    app: heap-oom
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
