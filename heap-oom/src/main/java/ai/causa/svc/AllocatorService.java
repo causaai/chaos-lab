@@ -56,7 +56,7 @@ public class AllocatorService {
 
     // --- Time-bound bookkeeping (virtual progress model) ---
     private final Object timeLock = new Object();
-    private long virtualApplied = 0;   // total “virtual” requests we've already accounted for
+    private volatile long virtualApplied = 0;   // total “virtual” requests we've already accounted for
     private volatile boolean deadlineTriggered = false;
 
     // Called by scheduler to auto-allocate when the deadline passes without traffic
