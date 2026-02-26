@@ -21,27 +21,33 @@ public class AllocationStormScenario implements GcScenario {
 
     @Override
     public void execute(Phase phase) {
-        int allocations;
+        long maxHeap = Runtime.getRuntime().maxMemory();
+
+        // Define allocation intensity as percentage of heap per tick
+        double factor;
 
         switch (phase) {
-            case BASELINE -> allocations = 200;
-            case RAMP -> allocations = 2_000;
-            case STRESS -> allocations = 15_000;
-            case RECOVERY -> allocations = 100;
-            default -> allocations = 50;
+            case BASELINE -> factor = 0.0005;   // 0.05% of heap
+            case RAMP -> factor = 0.002;        // 0.2% of heap
+            case STRESS -> factor = 0.01;       // 1% of heap
+            case RECOVERY -> factor = 0.0003;   // 0.03% of heap
+            default -> factor = 0.0005;
         }
 
-        allocateObjects(allocations);
+        long bytesToAllocate = (long) (maxHeap * factor);
+
+        allocateBytes(bytesToAllocate);
     }
 
-    private void allocateObjects(int count) {
+    private void allocateBytes(long totalBytes) {
+        long allocated = 0;
 
-        for (int i = 0; i < count; i++) {
-            // allocate random sized objects to mimic real allocation patterns
-            byte[] data = new byte[ThreadLocalRandom.current().nextInt(256, 4096)];
-
-            // prevent JIT eliminating allocation
+        while (allocated < totalBytes) {
+            int size = ThreadLocalRandom.current()
+                    .nextInt(512, 4096);
+            byte[] data = new byte[size];
             blackhole = data;
+            allocated += size;
         }
     }
 
