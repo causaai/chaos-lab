@@ -28,7 +28,7 @@ public class ScenarioScheduler {
      *
      * but slow enough to not overload CPU artificially.
      */
-    @Scheduled(every = "PT0.2S")
+    @Scheduled(every = "1s")
     void tick() {
 
         GcScenario scenario = registry.activeScenario();
