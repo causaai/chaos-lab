@@ -27,11 +27,11 @@ public class AllocationStormScenario implements GcScenario {
         double factor;
 
         switch (phase) {
-            case BASELINE -> factor = 0.0005;   // 0.05% of heap
-            case RAMP -> factor = 0.002;        // 0.2% of heap
-            case STRESS -> factor = 0.01;       // 1% of heap
-            case RECOVERY -> factor = 0.0003;   // 0.03% of heap
-            default -> factor = 0.0005;
+            case BASELINE -> factor = 0.001;   // 0.1% heap/sec
+            case RAMP -> factor = 0.01;       // 1% heap/sec
+            case STRESS -> factor = 0.10;     // 10% heap/sec
+            case RECOVERY -> factor = 0.0005; // 0.05% heap/sec
+            default -> factor = 0.001;
         }
 
         long bytesToAllocate = (long) (maxHeap * factor);
