@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: system-oom
+  labels:
+    app: system-oom
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: system-oom
+  template:
+    metadata:
+      labels:
+        app: system-oom
+    spec:
+      containers:
+        - name: system-oom
+          image: "quay.io/causa-ai-hub/quarkus-system-oom:latest"
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          ports:
+            - containerPort: 8080
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: system-oom-service
+  labels:
+    app: system-oom
+spec:
+  selector:
+    app: system-oom
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
