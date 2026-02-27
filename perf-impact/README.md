@@ -149,3 +149,8 @@ ai.causa
     ├── EnvKeys.java
     └── SimulatorDefaults.java
 ```
+
+##### Allocation storm
+```text
+GC_SCENARIO=ALLOCATION_STORM java -Xms512m -Xmx512m -Xlog:gc*,gc+heap=info,gc+age=trace      -jar target/quarkus-app/quarkus-run.jar
+```
