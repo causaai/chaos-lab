@@ -5,11 +5,16 @@ import ai.causa.utils.StartupTime;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryMXBean;
+import java.lang.management.MemoryUsage;
 import java.util.*;
 
 @ApplicationScoped
 public class AllocatorService {
+    private static final Logger LOGGER = Logger.getLogger(AllocatorService.class);
 
     @Inject StartupTime clock;
 
@@ -103,13 +108,23 @@ public class AllocatorService {
     }
 
     private Result applyRequestBound() {
+        long FINAL_OOM_MARGIN = 50L * 1024 * 1024;
         // Plan to OOM by the Nth request:
         long n = Math.max(1, reqTotal);
         long requestsLeft = Math.max(1, n - (requestCount - 1));
-        long remaining = bytesRemainingToMax();
+        long remaining = bytesRemainingInHeap();
         long bytesThisRequest = Math.max(1, divCeil(remaining, requestsLeft));
+        if (requestsLeft == 1)
+            bytesThisRequest = remaining + FINAL_OOM_MARGIN;
 
         allocateAndRetainBytes(bytesThisRequest);
+        LOGGER.infof("[request-mode] req=%d left=%d alloc=%dB remaining=%dB max=%dB retainedChunks=%d",
+                requestCount,
+                requestsLeft,
+                bytesThisRequest,
+                remaining,
+                Runtime.getRuntime().maxMemory(),
+                retained.size());
 
         return buildResult("request", bytesThisRequest, remaining, requestsLeft);
     }
@@ -201,6 +216,29 @@ public class AllocatorService {
         long max = rt.maxMemory(); // ~ -Xmx
         long remaining = max - used;
         return Math.max(0, remaining);
+    }
+
+    private long bytesRemainingInHeap() {
+        MemoryMXBean bean = ManagementFactory.getMemoryMXBean();
+        MemoryUsage heap = bean.getHeapMemoryUsage();
+
+        long used = heap.getUsed();
+        long max = heap.getMax();          // -Xmx or -1 if undefined
+        long committed = heap.getCommitted();
+
+        long effectiveLimit;
+
+        if (max > 0) {
+            // Properly configured -Xmx
+            effectiveLimit = max;
+        } else {
+            // No max defined → fall back to committed heap
+            effectiveLimit = committed;
+        }
+
+        long remaining = effectiveLimit - used;
+
+        return Math.max(0L, remaining);
     }
 
     private long usedBytes(Runtime rt) {

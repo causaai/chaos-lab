@@ -26,8 +26,8 @@ spec:
               memory: "256Mi"
               cpu: "500m"
           env:
-            - name: JAVA_OPTS
-              value: "-XX:+HeapDumpOnOutOfMemoryError"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms128m -Xmx128m"
           ports:
             - containerPort: 8080
 
