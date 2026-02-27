@@ -8,7 +8,7 @@ RUN mvn -q -B -DskipTests package
 
 # ===== Run =====
 FROM eclipse-temurin:21-jre
-ENV JAVA_OPTS="-XX:MaxRAMPercentage=80 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/dumps"
+ENV JAVA_OPTS="-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/dumps"
 WORKDIR /app
 COPY --from=build /build/target/quarkus-app ./quarkus-app
 EXPOSE 8080
