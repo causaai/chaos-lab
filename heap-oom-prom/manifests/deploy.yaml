@@ -32,6 +32,6 @@ spec:
 
           env:
             - name: JAVA_TOOL_OPTIONS
-              value: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=100"
+              value: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=80"
           ports:
             - containerPort: 8080
