@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heap-oom-prom
+  labels:
+    app: heap-oom-prom
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: heap-oom-prom
+
+  template:
+    metadata:
+      labels:
+        app: heap-oom-prom
+
+    spec:
+      containers:
+        - name: heap-oom-prom
+          image: quay.io/causa-ai-hub/quarkus-heap-oom:heap-oom-prom
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=95 -XX:+CrashOnOutOfMemoryError"
+          ports:
+            - containerPort: 8080
