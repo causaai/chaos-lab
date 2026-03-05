@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gc-pause
+  labels:
+    app: gc-pause
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gc-pause
+  template:
+    metadata:
+      labels:
+        app: gc-pause
+    spec:
+      containers:
+        - name: gc-pause
+          image: "quay.io/causa-ai-hub/quarkus-gc-pause:latest"
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=80.0"
+            - name: GC_SCENARIO
+              value: "ALLOCATION_STORM"
+          ports:
+            - containerPort: 8080
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gc-pause-service
+  labels:
+    app: gc-pause
+spec:
+  selector:
+    app: gc-pause
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
