@@ -27,7 +27,7 @@ spec:
               cpu: "500m"
           env:
             - name: JAVA_TOOL_OPTIONS
-              value: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=80.0"
+              value: "-XX:+UseContainerSupport -Xms256m -Xmx378m -Xlog:gc*,gc+heap=info,gc+age=trace"
             - name: GC_SCENARIO
               value: "ALLOCATION_STORM"
           ports:
