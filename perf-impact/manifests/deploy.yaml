@@ -4,6 +4,8 @@ metadata:
   name: gc-pause
   labels:
     app: gc-pause
+  annotations:
+    cryostat.io/inject: "true"
 spec:
   replicas: 1
   selector:
