@@ -29,21 +29,12 @@ spec:
               cpu: "500m"
           env:
             - name: JAVA_TOOL_OPTIONS
-              value: >
-                -XX:+UseContainerSupport
-                -Xms256m
-                -Xmx378m
-                -Xlog:gc*,gc+heap=info,gc+age=trace
-                -Dcom.sun.management.jmxremote
-                -Dcom.sun.management.jmxremote.port=9091
-                -Dcom.sun.management.jmxremote.rmi.port=9091
-                -Dcom.sun.management.jmxremote.authenticate=false
-                -Dcom.sun.management.jmxremote.ssl=false
-                -Djava.rmi.server.hostname=localhost
+              value: "-XX:+UseContainerSupport -Xms256m -Xmx378m -Xlog:gc*,gc+heap=info,gc+age=trace -Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.port=9091 -Dcom.sun.management.jmxremote.rmi.port=9091 -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Djava.rmi.server.hostname=localhost"
             - name: GC_SCENARIO
               value: "ALLOCATION_STORM"
           ports:
             - containerPort: 8080
+            - containerPort: 9091
 
 ---
 apiVersion: v1
