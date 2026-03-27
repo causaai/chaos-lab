@@ -34,7 +34,9 @@ public class ScenarioScheduler {
      *
      * but slow enough to not overload CPU artificially.
      */
-    @Scheduled(every = "1s", delay = 60, delayUnit = TimeUnit.SECONDS)
+    @Scheduled(every = "1s"
+            , delayed = "${scenario.scheduler.delay:60s}"
+    )
     void tick() {
 
         GcScenario scenario = registry.activeScenario();

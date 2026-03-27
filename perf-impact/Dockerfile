@@ -16,7 +16,8 @@ FROM eclipse-temurin:21-jre
 ENV JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport \
 -XX:MaxRAMPercentage=80.0 \
 -Xlog:gc*,gc+heap=info,gc+age=trace"
-ENV GC_SCENARIO="ALLOCATION_STORM"
+ENV GC_SCENARIO="PROMOTION_PRESSURE"
+ENV SCENARIO_SCHEDULER_DELAY="0s"
 
 WORKDIR /app
 COPY --from=build /build/target/quarkus-app ./quarkus-app
