@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gc-pause-load
+  labels:
+    app: gc-pause-load
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gc-pause-load
+  template:
+    metadata:
+      labels:
+        app: gc-pause-load
+    spec:
+      containers:
+        - name: wrk
+          image: docker.io/williamyeh/wrk:latest
+          command: ["/bin/sh","-c"]
+          args:
+            - |
+              echo "Starting wrk load...";
+              sleep 10;
+              while true; do
+                wrk -t4 -c128 -d60s http://gc-pause-service:8080/work;
+              done
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "128Mi"
+            limits:
+              cpu: "2"
+              memory: "256Mi"
