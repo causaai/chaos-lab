@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: gc-pause-load
+  name: auth-cache-load
   labels:
-    app: gc-pause-load
+    app: auth-cache-load
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: gc-pause-load
+      app: auth-cache-load
   template:
     metadata:
       labels:
-        app: gc-pause-load
+        app: auth-cache-load
     spec:
       containers:
         - name: wrk
@@ -23,7 +23,7 @@ spec:
               echo "Starting wrk load...";
               sleep 10;
               while true; do
-                wrk -t4 -c128 -d60s http://gc-pause-service:8080/work;
+                wrk -t4 -c128 -d60s http://auth-cache-service:8080/work;
               done
           resources:
             requests:

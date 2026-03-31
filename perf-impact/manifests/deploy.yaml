@@ -1,23 +1,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: gc-pause
+  name: auth-cache
   labels:
-    app: gc-pause
+    app: auth-cache
   annotations:
     cryostat.io/inject: "true"
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: gc-pause
+      app: auth-cache
   template:
     metadata:
       labels:
-        app: gc-pause
+        app: auth-cache
     spec:
       containers:
-        - name: gc-pause
+        - name: auth-cache
           image: "quay.io/causa-ai-hub/quarkus-gc-pause:promotion-pressure-nd"
           imagePullPolicy: IfNotPresent
           resources:
@@ -37,12 +37,12 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: gc-pause-service
+  name: auth-cache-service
   labels:
-    app: gc-pause
+    app: auth-cache
 spec:
   selector:
-    app: gc-pause
+    app: auth-cache
   ports:
     - name: http
       protocol: TCP
