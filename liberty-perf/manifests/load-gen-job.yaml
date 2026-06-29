@@ -1,0 +1,67 @@
+---
+# ============================================================
+# Load Generator — Kubernetes Job
+# Deploys alongside the main application to drive HTTP load.
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: load-gen-config
+  namespace: chaos-test
+  labels:
+    app: liberty-perf-load-gen
+data:
+  # Target service (must match Service name in deploy.yaml)
+  TARGET_HOST: "liberty-perf-svc"
+  TARGET_PORT: "9080"
+
+  # Load profile
+  CONCURRENT_USERS: "50"
+  DURATION_SECONDS: "600"
+  REQUEST_DELAY_MS: "50"
+
+  # Mix: percentage of requests that are booking (airline) vs transaction (banking)
+  BOOKING_RATIO: "50"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: liberty-perf-load-gen
+  namespace: chaos-test
+  labels:
+    app: liberty-perf-load-gen
+spec:
+  # Do not retry on failure — a failed run should be investigated
+  backoffLimit: 0
+  # Clean up 24h after completion
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: liberty-perf-load-gen
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: load-gen
+          # The load generator is packaged in the same image as the main app.
+          # The entrypoint is overridden to run LoadGenerator instead of Liberty.
+          image: quay.io/causa-ai-hub/liberty-perf:1.0.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - java
+            - -cp
+            - /opt/wlp/usr/shared/resources/app/liberty-perf.jar
+            - ai.causa.libertyperf.load.LoadGenerator
+          envFrom:
+            - configMapRef:
+                name: load-gen-config
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"

@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<server description="Liberty Performance Benchmark Server">
+
+    <!-- ============================================================
+         Feature set: MicroProfile 6.1 + Jakarta EE 10 core subset
+         ============================================================ -->
+    <featureManager>
+        <!-- MicroProfile -->
+        <feature>microProfile-6.1</feature>
+        <!-- Jakarta REST -->
+        <feature>restfulWS-3.1</feature>
+        <!-- JSON Binding / Processing -->
+        <feature>jsonb-3.0</feature>
+        <feature>jsonp-2.1</feature>
+        <!-- Concurrency for virtual-thread support -->
+        <feature>concurrent-3.0</feature>
+        <!-- Connection pool / datasource -->
+        <feature>jdbc-4.3</feature>
+        <!-- Health (MicroProfile Health) -->
+        <feature>mpHealth-4.0</feature>
+        <!-- Metrics (MicroProfile Metrics → Prometheus) -->
+        <feature>mpMetrics-5.1</feature>
+        <!-- Config -->
+        <feature>mpConfig-3.1</feature>
+        <!-- OpenAPI -->
+        <feature>mpOpenAPI-3.1</feature>
+        <!-- CDI -->
+        <feature>cdi-4.0</feature>
+        <!-- JSON logging -->
+        <feature>logstashCollector-1.0</feature>
+    </featureManager>
+
+    <!-- ============================================================
+         HTTP / HTTPS endpoints
+         Variables are overridable via env vars or bootstrap.properties
+         ============================================================ -->
+    <variable name="default.http.port"  defaultValue="9080"/>
+    <variable name="default.https.port" defaultValue="9443"/>
+    <variable name="app.location"       defaultValue="liberty-perf.war"/>
+
+    <!-- HTTP channel config: tune keep-alive and max connections to expose
+         connection exhaustion bugs when persistence.maxOpen is set low -->
+    <httpEndpoint id="defaultHttpEndpoint"
+                  httpPort="${default.http.port}"
+                  httpsPort="${default.https.port}">
+        <tcpOptions soReuseAddr="true"/>
+        <!-- keepAliveEnabled=true (default); maxKeepAliveRequests controls
+             how many requests share a connection before it is closed -->
+        <httpOptions maxKeepAliveRequests="${env.HTTP_MAX_KEEPALIVE_REQUESTS:-200}"
+                     persistTimeout="${env.HTTP_PERSIST_TIMEOUT_S:-30}"/>
+    </httpEndpoint>
+
+    <!-- ============================================================
+         Thread pool: deliberately under-provisioned default so that
+         high concurrency exposes thread starvation quickly.
+         Raise MAX_THREADS to relieve pressure.
+         ============================================================ -->
+    <executor name="LibertyThreadPool"
+              coreThreads="${env.THREAD_POOL_CORE:-10}"
+              maxThreads="${env.THREAD_POOL_MAX:-50}"/>
+
+    <!-- ============================================================
+         JDBC DataSource — H2 embedded (dev/test) or PostgreSQL (prod).
+         Connection pool settings are the primary chaos knob:
+           - maxPoolSize low  → connection starvation
+           - connectionTimeout short → fast rejection
+         ============================================================ -->
+    <library id="h2Lib">
+        <fileset dir="${server.config.dir}/lib" includes="h2-*.jar"/>
+    </library>
+
+    <dataSource id="DefaultDataSource"
+                jndiName="jdbc/libertyPerfDS"
+                type="javax.sql.ConnectionPoolDataSource"
+                statementCacheSize="10">
+
+        <jdbcDriver libraryRef="h2Lib"/>
+
+        <!-- H2 in-process DB (replaced by PostgreSQL in prod via env override) -->
+        <properties.h2.embedded
+            URL="jdbc:h2:mem:libertyPerfDB;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE"
+            user="sa"
+            password=""/>
+
+        <!-- ============================================================
+             Connection Pool Chaos Knobs
+             - maxPoolSize:        set LOW (e.g. 5) to trigger starvation
+             - minPoolSize:        eagerly open connections
+             - connectionTimeout:  how long threads wait for a connection
+             - reapTime:           how often to scan for idle connections
+             - maxIdleTime:        close idle connections after this
+             Default values are intentionally tight to show pressure fast.
+             ============================================================ -->
+        <connectionManager
+            maxPoolSize="${env.DB_MAX_POOL_SIZE:-20}"
+            minPoolSize="${env.DB_MIN_POOL_SIZE:-2}"
+            connectionTimeout="${env.DB_CONNECTION_TIMEOUT_MS:-5000}"
+            maxIdleTime="${env.DB_MAX_IDLE_TIME_S:-60}"
+            reapTime="${env.DB_REAP_TIME_S:-180}"
+            agedTimeout="${env.DB_AGED_TIMEOUT_S:-3600}"
+            purgePolicy="FailingConnectionOnly"/>
+    </dataSource>
+
+    <!-- ============================================================
+         Application deployment
+         ============================================================ -->
+    <webApplication id="liberty-perf"
+                    location="${app.location}"
+                    contextRoot="/"/>
+
+    <!-- ============================================================
+         Logging — structured JSON for Kubernetes log aggregation
+         ============================================================ -->
+    <logging
+        messageFormat="json"
+        consoleFormat="json"
+        consoleLogLevel="INFO"
+        traceSpecification="*=info"
+        maxFileSize="100"
+        maxFiles="5"
+        isoDateFormat="true"
+        traceFileName="trace.log"
+        logDirectory="/logs"/>
+
+</server>
