@@ -40,6 +40,35 @@ public class AccountResource {
     // Account endpoints
     // -------------------------------------------------------------------------
 
+    @POST
+    @Operation(summary = "Create a new account")
+    @APIResponse(responseCode = "201", description = "Account created")
+    @APIResponse(responseCode = "400", description = "Invalid request")
+    public Response createAccount(AccountRequest request) {
+        if (request == null || request.getOwnerName() == null || request.getAccountType() == null) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(ApiResponse.error("ownerName and accountType are required",
+                            "INVALID_REQUEST", UUID.randomUUID().toString()))
+                    .build();
+        }
+        String correlationId = UUID.randomUUID().toString();
+        long start = System.currentTimeMillis();
+        Account.AccountType type;
+        try {
+            type = Account.AccountType.valueOf(request.getAccountType().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(ApiResponse.error("Invalid accountType: " + request.getAccountType(),
+                            "INVALID_REQUEST", correlationId))
+                    .build();
+        }
+        Account created = transactionService.createAccount(
+                request.getOwnerName(), type, request.getInitialBalance());
+        return Response.status(Response.Status.CREATED)
+                .entity(ApiResponse.ok(created, correlationId, System.currentTimeMillis() - start))
+                .build();
+    }
+
     @GET
     @Operation(summary = "List all accounts", description = "Returns up to 100 active accounts")
     @APIResponse(responseCode = "200", description = "List of accounts")
@@ -150,8 +179,23 @@ public class AccountResource {
     }
 
     // -------------------------------------------------------------------------
-    // Request DTO
+    // Request DTOs
     // -------------------------------------------------------------------------
+
+    public static class AccountRequest {
+        private String     ownerName;
+        private String     accountType;
+        private BigDecimal initialBalance;
+
+        public String getOwnerName()              { return ownerName; }
+        public void setOwnerName(String v)        { this.ownerName = v; }
+
+        public String getAccountType()            { return accountType; }
+        public void setAccountType(String v)      { this.accountType = v; }
+
+        public BigDecimal getInitialBalance()     { return initialBalance; }
+        public void setInitialBalance(BigDecimal v) { this.initialBalance = v; }
+    }
 
     public static class TransactionRequest {
         private String     type;

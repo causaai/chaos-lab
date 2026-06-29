@@ -4,7 +4,7 @@
 # by the PRD constraint: "Semeru java 25 docker images from
 # Adoptium marketplace".  Semeru 21 LTS is the current stable.
 # ============================================================
-FROM maven:3.9.9-ibm-semeru-21-jammy AS builder
+FROM docker.io/library/maven:3.9.9-ibm-semeru-21-jammy AS builder
 
 WORKDIR /build
 
@@ -13,15 +13,17 @@ COPY pom.xml .
 RUN mvn -B -q -e -C -DskipTests dependency:go-offline \
         -Dliberty.skip=true || true
 
-# Copy source and build
+# Copy source and build — Liberty Maven plugin assembles a complete
+# server tree under target/liberty/wlp/ (no zip extraction needed)
 COPY src ./src
 RUN mvn -B -q -DskipTests package
 
 # ============================================================
 # Stage 2 — Runtime
 # IBM Semeru Runtimes JRE 21 (Eclipse OpenJ9)
+# Copy the pre-assembled wlp directory directly — no unzip, no apt-get.
 # ============================================================
-FROM ibm-semeru-runtimes:open-21-jre-jammy
+FROM docker.io/library/ibm-semeru-runtimes:open-21-jre-jammy
 
 # JVM tuning: container-aware memory, crash on OOM for clean restart
 ENV JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport \
@@ -31,19 +33,17 @@ ENV JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport \
     -XX:HeapDumpPath=/dumps/heapdump.hprof \
     -Dfile.encoding=UTF-8"
 
-# Copy the packaged Liberty server
-COPY --from=builder /build/target/liberty-perf.zip /opt/liberty-perf.zip
+# Copy the fully assembled Liberty server from builder stage directly.
+# The Liberty Maven plugin places the complete server at target/liberty/wlp/
+# which already contains: runtime, features, server.xml, and the deployed WAR.
+COPY --from=builder /build/target/liberty/wlp /opt/wlp
 
-RUN apt-get update && apt-get install -y --no-install-recommends unzip \
- && unzip -q /opt/liberty-perf.zip -d /opt/ \
- && rm /opt/liberty-perf.zip \
- && apt-get remove -y unzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+# Copy H2 JDBC driver to Liberty shared resources so the jdbcDriver libraryRef
+# in server.xml can locate it. (${shared.resource.dir} = /opt/wlp/usr/shared/resources)
+COPY --from=builder /build/src/main/liberty/shared/resources/h2-2.2.224.jar \
+     /opt/wlp/usr/shared/resources/h2-2.2.224.jar
 
-# Copy H2 driver into Liberty shared lib directory
-COPY --from=builder /build/target/liberty/wlp/usr/servers/defaultServer/lib/ \
-     /opt/wlp/usr/servers/defaultServer/lib/
-
-# Directories for dumps and logs
+# Directories for heap dumps and structured logs
 RUN mkdir -p /dumps /logs \
  && chown -R 1001:0 /opt/wlp /dumps /logs \
  && chmod -R g=u /opt/wlp /dumps /logs

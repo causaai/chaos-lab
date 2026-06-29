@@ -123,6 +123,31 @@
                 <version>${surefire.version}</version>
             </plugin>
 
+            <!-- Copy H2 driver to Liberty's shared resources directory so the
+                 jdbcDriver libraryRef in server.xml can locate it at runtime. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.6.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-h2-to-shared</id>
+                        <phase>prepare-package</phase>
+                        <goals><goal>copy</goal></goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>com.h2database</groupId>
+                                    <artifactId>h2</artifactId>
+                                    <version>2.2.224</version>
+                                    <outputDirectory>${project.basedir}/src/main/liberty/shared/resources</outputDirectory>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
             <plugin>
                 <groupId>io.openliberty.tools</groupId>
                 <artifactId>liberty-maven-plugin</artifactId>
@@ -134,6 +159,9 @@
                         <version>${liberty.version}</version>
                         <type>zip</type>
                     </runtimeArtifact>
+                    <!-- Disable loose application so the actual WAR is deployed inside
+                         the container, not a dev-mode XML referencing local host paths. -->
+                    <looseApplication>false</looseApplication>
                     <bootstrapProperties>
                         <default.http.port>9080</default.http.port>
                         <default.https.port>9443</default.https.port>

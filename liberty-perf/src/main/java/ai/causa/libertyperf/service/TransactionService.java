@@ -67,6 +67,23 @@ public class TransactionService {
         return accountRepository.findAll();
     }
 
+    @Counted(name = "accounts.created", description = "Total accounts created")
+    @Timed(name = "account.create.time", unit = MetricUnits.MILLISECONDS,
+            description = "Time to create a new account")
+    public Account createAccount(String ownerName, Account.AccountType accountType, BigDecimal initialBalance) {
+        Account a = new Account();
+        a.setAccountId(UUID.randomUUID().toString());
+        a.setOwnerId(UUID.randomUUID().toString());
+        a.setOwnerName(ownerName);
+        a.setAccountType(accountType);
+        a.setBalance(initialBalance != null ? initialBalance : BigDecimal.ZERO);
+        a.setCurrency("USD");
+        a.setActive(true);
+        a.setCreatedAt(java.time.Instant.now());
+        a.setTransactionCount(0);
+        return accountRepository.save(a);
+    }
+
     // -------------------------------------------------------------------------
     // Transaction operations
     // -------------------------------------------------------------------------

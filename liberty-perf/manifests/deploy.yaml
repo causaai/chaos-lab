@@ -84,10 +84,12 @@ spec:
         prometheus.io/port: "9080"
     spec:
       # Non-root container as required by security constraints
+      # runAsUser / fsGroup are intentionally omitted — OpenShift assigns
+      # a UID from the namespace's allowed range automatically.
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1001
-        fsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: liberty-perf
           image: quay.io/causa-ai-hub/liberty-perf:1.0.0
@@ -148,6 +150,11 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           volumeMounts:
             - name: dumps
               mountPath: /dumps
@@ -182,6 +189,27 @@ spec:
       targetPort: 9080
       protocol: TCP
   type: ClusterIP
+---
+# ============================================================
+# Route — external HTTP access (OpenShift)
+# ============================================================
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: liberty-perf
+  namespace: chaos-test
+  labels:
+    app: liberty-perf
+spec:
+  to:
+    kind: Service
+    name: liberty-perf-svc
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
 ---
 # ============================================================
 # HorizontalPodAutoscaler — scale based on CPU
