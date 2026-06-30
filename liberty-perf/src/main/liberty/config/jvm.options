@@ -5,34 +5,41 @@
 # appends each non-blank, non-comment line to the JVM command.
 #
 # In Kubernetes the file is injected via a ConfigMap volume mount
-# (liberty-perf-server-xml → key "jvm.options") so changes here
+# (liberty-perf-jvm-options → key "jvm.options") so changes here
 # must be reflected in the ConfigMap in manifests/deploy.yaml.
+#
+# Design intent: the primary chaos scenario is HTTP connection pool
+# exhaustion (DB_MAX_POOL_SIZE=3, CHAOS_DB_LEAK_ENABLED=true), NOT
+# memory pressure.  Heap and JIT logging are retained for observability
+# but heap dumps on OOM are removed — OOM is not expected in this scenario.
 # ============================================================
 
 # ── Verbose GC ─────────────────────────────────────────────────────────────
 # OpenJ9 XML GC log: 4 rotating files, wraps every 20 000 GC cycles.
 # Produces verbosegc.001.log … verbosegc.004.log under /logs.
-# Readable by IBM Garbage Collection and Memory Visualizer (GCMV) and
-# Eclipse Memory Analyzer (MAT).
+# Retained for observability; under normal load GC should remain quiet,
+# confirming that memory is not the pressure point.
 -Xverbosegclog:/logs/verbosegc.%seq.log,4,20000
 
 # ── JIT compilation trace ───────────────────────────────────────────────────
 # Emits one line per method at compile / recompile time.
 # Capped at 50 MB; the file stops growing beyond that limit.
-# Use to diagnose JIT warm-up cost and unexpected deoptimisation.
 -Xjit:verbose={compileStart|compileEnd|recompile|methodRecompilationFailed},vlog=/logs/jit.log,limit=52428800
 
 # ── Class-loading ───────────────────────────────────────────────────────────
 # Prints one line to stdout for every class dynamically loaded/unloaded.
 # Captured by the pod log collector alongside Liberty's structured output.
-# Use to detect class-loader leaks under long-running load.
 -verbose:dynload
+
+# ── Shared class cache — accelerates Liberty startup ────────────────────────
+# Caches AOT-compiled classes in a 64 MB shared memory segment so subsequent
+# pod starts complete well within the startup probe window.
+# Eliminates JIT-throttle startup-probe kills so the only runtime failure
+# observable under load is HTTP connection pool exhaustion.
+-Xshareclasses:name=liberty,cacheDir=/tmp/sharedcache
+-Xscmx64m
 
 # ── Thread dump on SIGQUIT / crash / abort ──────────────────────────────────
 # Trigger: kill -3 <pid>  OR  oc exec -n chaos-test <pod> -- kill -3 1
-# Written to /dumps/ (emptyDir volume, same as heap dumps).
+# Written to /dumps/ (emptyDir volume).
 -Xdump:java:events=user+gpf+abort,file=/dumps/javacore.%Y%m%d.%H%M%S.%pid.txt
-
-# ── Heap dump on OutOfMemoryError ───────────────────────────────────────────
-# Written to /dumps/; use IBM HeapAnalyzer or Eclipse MAT to analyse.
--Xdump:heap:events=systhrow+throw,filter=java/lang/OutOfMemoryError,file=/dumps/heapdump.%Y%m%d.%H%M%S.%pid.phd
