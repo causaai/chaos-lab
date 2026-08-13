@@ -1,0 +1,63 @@
+---
+# =============================================================================
+# Load Generator Job
+# Spins up the LoadGenerator class packaged inside the same quarkus-perf image.
+# The main class is overridden via the JAVA_MAIN_CLASS env var (or ENTRYPOINT override).
+# =============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: quarkus-perf-load-gen
+  namespace: chaos-test
+  labels:
+    app: quarkus-perf-load-gen
+spec:
+  # Allow up to 3 retries in case the application isn't ready yet
+  backoffLimit: 3
+  # Clean up completed jobs after 1 hour
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: quarkus-perf-load-gen
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: load-gen
+          image: quay.io/causa-ai-hub/quarkus-perf:1.0.0
+          imagePullPolicy: Always
+          # Override the default entrypoint to run the LoadGenerator main class
+          command:
+            - "java"
+            - "-cp"
+            - "/deployments/quarkus-run.jar:/deployments/lib/main/*:/deployments/app/*"
+            - "ai.causa.quarkusperf.load.LoadGenerator"
+          env:
+            - name: TARGET_HOST
+              value: "quarkus-perf-svc"
+            - name: TARGET_PORT
+              value: "8080"
+            - name: CONCURRENT_USERS
+              value: "20"
+            - name: DURATION_SECONDS
+              value: "300"
+            - name: REQUEST_DELAY_MS
+              value: "100"
+            - name: BOOKING_RATIO
+              value: "50"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL

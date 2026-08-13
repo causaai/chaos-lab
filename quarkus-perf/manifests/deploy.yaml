@@ -1,0 +1,282 @@
+---
+# =============================================================================
+# Namespace
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos-test
+  labels:
+    app.kubernetes.io/part-of: chaos-lab
+---
+# =============================================================================
+# ConfigMap — externalised application settings
+# Override values here without rebuilding the image.
+# All keys map to env vars consumed by application.properties via ${ENV_VAR:default}.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: quarkus-perf-config
+  namespace: chaos-test
+  labels:
+    app: quarkus-perf
+data:
+  # ── Thread pool ─────────────────────────────────────────────────────────
+  # Reduce THREAD_POOL_MAX to trigger thread starvation with slow queries
+  THREAD_POOL_CORE: "10"
+  THREAD_POOL_MAX: "200"
+
+  # ── Agroal DB connection pool ────────────────────────────────────────────
+  # Lower DB_MAX_POOL_SIZE to trigger connection exhaustion quickly
+  DB_MAX_POOL_SIZE: "20"
+
+  # ── HTTP keep-alive ──────────────────────────────────────────────────────
+  # CHAOS_HTTP_IDLE_TIMEOUT_ENABLED=true + CHAOS_HTTP_IDLE_TIMEOUT_S=60 holds
+  # connections (and their response buffers) open longer.
+  # At 50 concurrent workers × 256KB response × 60s idle = sustained heap pressure.
+  CHAOS_HTTP_IDLE_TIMEOUT_ENABLED: "false"
+  CHAOS_HTTP_IDLE_TIMEOUT_S: "60"
+
+  # ── Chaos knobs ──────────────────────────────────────────────────────────
+  # Primary scenario: HTTP large-response + keep-alive
+  # Each response padded with CHAOS_HTTP_LARGE_RESPONSE_KB KB of Base64 data.
+  # Combined with CHAOS_HTTP_IDLE_TIMEOUT_ENABLED=true:
+  #   live_heap ≈ CONCURRENT_USERS × CHAOS_HTTP_LARGE_RESPONSE_KB KB × 2.33
+  CHAOS_HTTP_LARGE_RESPONSE_ENABLED: "false"
+  CHAOS_HTTP_LARGE_RESPONSE_KB: "256"
+
+  # Secondary: DB connection leak
+  CHAOS_DB_LEAK_ENABLED: "false"
+  # Slow query simulation (ms, 0=disabled)
+  CHAOS_DB_SLOW_QUERY_MS: "0"
+
+  # Tertiary: background heap leak
+  CHAOS_MEMORY_CACHE_ENABLED: "false"
+  # Objects (64KB each) cached per transaction when cache is on
+  CHAOS_MEMORY_OBJECTS_PER_TX: "1"
+
+  # ── OTEL collector endpoint ──────────────────────────────────────────────
+  # Point to your OTEL collector (e.g. opentelemetry-collector.observability:4317)
+  # Set OTEL_SDK_DISABLED=true to turn off tracing/metrics export entirely
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://opentelemetry-collector.observability:4317"
+  OTEL_SDK_DISABLED: "false"
+---
+# =============================================================================
+# Deployment — main application (3 replicas)
+# Compatible with both OpenShift (Route) and kind (Ingress/NodePort).
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quarkus-perf
+  namespace: chaos-test
+  labels:
+    app: quarkus-perf
+    version: "1.0.0"
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/q/metrics"
+    prometheus.io/port: "8080"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: quarkus-perf
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: quarkus-perf
+        version: "1.0.0"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/q/metrics"
+        prometheus.io/port: "8080"
+    spec:
+      # Non-root, seccomp locked — works on both OpenShift (random UID injection)
+      # and standard Kubernetes (USER 185 from image).
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: quarkus-perf
+          image: quay.io/causa-ai-hub/quarkus-perf:1.0.0
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: quarkus-perf-config
+          env:
+            - name: JAVA_OPTS_APPEND
+              value: >-
+                -XX:+UseContainerSupport
+                -XX:MaxRAMPercentage=75.0
+                -XX:+HeapDumpOnOutOfMemoryError
+                -XX:HeapDumpPath=/dumps/heapdump.hprof
+                -Xlog:gc*:file=/dumps/gc.log:time,uptime,level,tags:filecount=4,filesize=20m
+                -Dfile.encoding=UTF-8
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+          # Startup probe — give Quarkus up to 60s to start
+          startupProbe:
+            httpGet:
+              path: /q/health/started
+              port: 8080
+            failureThreshold: 12
+            periodSeconds: 5
+            timeoutSeconds: 3
+          # Liveness probe — restart if heap > 90%
+          livenessProbe:
+            httpGet:
+              path: /q/health/live
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness probe — stop traffic if DB is unreachable
+          readinessProbe:
+            httpGet:
+              path: /q/health/ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: dumps
+              mountPath: /dumps
+            - name: logs
+              mountPath: /logs
+      volumes:
+        - name: dumps
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+---
+# =============================================================================
+# Service — ClusterIP for internal access + Prometheus scraping
+# Works on both OpenShift and kind clusters.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: quarkus-perf-svc
+  namespace: chaos-test
+  labels:
+    app: quarkus-perf
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/q/metrics"
+    prometheus.io/port: "8080"
+spec:
+  selector:
+    app: quarkus-perf
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP
+---
+# =============================================================================
+# Route — external HTTP access (OpenShift only)
+# kind users: use the Ingress below or NodePort patch instead.
+# =============================================================================
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: quarkus-perf
+  namespace: chaos-test
+  labels:
+    app: quarkus-perf
+  annotations:
+    kubernetes.io/ingress.class: "openshift-default"
+spec:
+  to:
+    kind: Service
+    name: quarkus-perf-svc
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+---
+# =============================================================================
+# Ingress — external HTTP access (kind / vanilla Kubernetes)
+# OpenShift users: use the Route above instead.
+# Requires nginx ingress controller: kubectl apply -f
+#   https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: quarkus-perf
+  namespace: chaos-test
+  labels:
+    app: quarkus-perf
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+    - host: quarkus-perf.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: quarkus-perf-svc
+                port:
+                  number: 8080
+---
+# =============================================================================
+# HorizontalPodAutoscaler — scale based on CPU utilisation
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: quarkus-perf-hpa
+  namespace: chaos-test
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: quarkus-perf
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

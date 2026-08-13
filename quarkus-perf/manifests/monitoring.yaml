@@ -1,0 +1,75 @@
+---
+# =============================================================================
+# Prometheus ServiceMonitor — scrapes quarkus-perf's /q/metrics endpoint
+# Requires prometheus-operator (kube-prometheus-stack) installed in the cluster.
+# Works on both OpenShift and kind.
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: quarkus-perf
+  namespace: chaos-test
+  labels:
+    app: quarkus-perf
+    # Label must match the prometheus-operator's serviceMonitorSelector
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: quarkus-perf
+  endpoints:
+    - port: http
+      path: /q/metrics
+      interval: 15s
+      scrapeTimeout: 10s
+---
+# =============================================================================
+# PrometheusRule — alerting rules for chaos scenarios
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: quarkus-perf-alerts
+  namespace: chaos-test
+  labels:
+    app: quarkus-perf
+    release: prometheus
+spec:
+  groups:
+    - name: quarkus-perf.chaos
+      rules:
+        - alert: QuarkusPerfHighHeapUsage
+          expr: quarkus_perf_heap_used_ratio > 0.85
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "quarkus-perf heap usage > 85%"
+            description: "Pod {{ $labels.pod }} heap ratio {{ $value | humanizePercentage }}"
+
+        - alert: QuarkusPerfHeapCritical
+          expr: quarkus_perf_heap_used_ratio > 0.90
+          for: 30s
+          labels:
+            severity: critical
+          annotations:
+            summary: "quarkus-perf heap usage > 90% — liveness probe will fail"
+            description: "Pod {{ $labels.pod }} heap ratio {{ $value | humanizePercentage }}"
+
+        - alert: QuarkusPerfLeakCacheGrowing
+          expr: rate(quarkus_perf_leak_cache_entries[2m]) > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "quarkus-perf memory leak cache is growing"
+            description: "{{ $value | humanize }} entries/s added to leak cache"
+
+        - alert: QuarkusPerfConnectionPoolExhaustion
+          expr: agroal_acquired_count / agroal_max_used_count > 0.90
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "quarkus-perf Agroal connection pool near exhaustion"
+            description: "Pool utilisation {{ $value | humanizePercentage }}"
