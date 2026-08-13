@@ -1,0 +1,169 @@
+---
+# ============================================================
+# Namespace
+# ============================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos-test
+  labels:
+    app.kubernetes.io/part-of: chaos-lab
+---
+# ============================================================
+# ConfigMap — all chaos knobs OFF at baseline
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: quarkus-perf-config
+  namespace: chaos-test
+  labels:
+    app: quarkus-perf
+data:
+  THREAD_POOL_CORE: "10"
+  THREAD_POOL_MAX: "200"
+
+  DB_MAX_POOL_SIZE: "20"
+
+  CHAOS_HTTP_IDLE_TIMEOUT_ENABLED: "false"
+  CHAOS_HTTP_IDLE_TIMEOUT_S: "60"
+
+  CHAOS_HTTP_LARGE_RESPONSE_ENABLED: "false"
+  CHAOS_HTTP_LARGE_RESPONSE_KB: "256"
+
+  CHAOS_DB_LEAK_ENABLED: "false"
+  CHAOS_DB_SLOW_QUERY_MS: "0"
+
+  CHAOS_MEMORY_CACHE_ENABLED: "false"
+  CHAOS_MEMORY_OBJECTS_PER_TX: "1"
+
+  # Disable OTEL export — no collector in kind cluster
+  OTEL_SDK_DISABLED: "true"
+---
+# ============================================================
+# Deployment — 1 replica (single-node kind cluster)
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quarkus-perf
+  namespace: chaos-test
+  labels:
+    app: quarkus-perf
+    version: "1.0.0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: quarkus-perf
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: quarkus-perf
+        version: "1.0.0"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 185
+        fsGroup: 185
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: quarkus-perf
+          image: quay.io/causa-ai-hub/quarkus-perf:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: quarkus-perf-config
+          env:
+            - name: JAVA_OPTS_APPEND
+              value: >-
+                -XX:+UseContainerSupport
+                -XX:MaxRAMPercentage=75.0
+                -XX:+HeapDumpOnOutOfMemoryError
+                -XX:HeapDumpPath=/dumps/heapdump.hprof
+                -Xlog:gc*:file=/dumps/gc.log:time,uptime,level,tags:filecount=4,filesize=20m
+                -Dfile.encoding=UTF-8
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+          startupProbe:
+            httpGet:
+              path: /q/health/started
+              port: 8080
+            failureThreshold: 12
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /q/health/live
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /q/health/ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: dumps
+              mountPath: /dumps
+            - name: logs
+              mountPath: /logs
+      volumes:
+        - name: dumps
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+---
+# ============================================================
+# Service — NodePort for direct kind cluster access
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: quarkus-perf-svc
+  namespace: chaos-test
+  labels:
+    app: quarkus-perf
+spec:
+  selector:
+    app: quarkus-perf
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080
+      protocol: TCP
+  type: NodePort
