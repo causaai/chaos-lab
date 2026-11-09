@@ -93,6 +93,7 @@ spec:
       labels:
         app: quarkus-perf
         version: "1.0.0"
+        com.redhat.component.name: "Quarkus"
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/path: "/q/metrics"

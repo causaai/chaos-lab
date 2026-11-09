@@ -66,6 +66,7 @@ spec:
       labels:
         app: quarkus-perf
         version: "1.0.0"
+        com.redhat.component.name: "Quarkus"
     spec:
       securityContext:
         runAsNonRoot: true
