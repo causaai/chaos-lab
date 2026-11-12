@@ -40,31 +40,33 @@
     <variable name="default.https.port"             defaultValue="9443"/>
     <variable name="app.location"                   defaultValue="liberty-perf.war"/>
 
-    <!-- Thread pool -->
-    <variable name="THREAD_POOL_CORE"               defaultValue="20"/>
-    <variable name="THREAD_POOL_MAX"                defaultValue="200"/>
+    <!-- Thread pool — kept deliberately small so request threads queue under
+         concurrent load before connection pool exhaustion occurs. -->
+    <variable name="THREAD_POOL_CORE"               defaultValue="10"/>
+    <variable name="THREAD_POOL_MAX"                defaultValue="20"/>
 
-    <!-- DB connection pool -->
-    <variable name="DB_MAX_POOL_SIZE"               defaultValue="20"/>
-    <variable name="DB_MIN_POOL_SIZE"               defaultValue="2"/>
-    <variable name="DB_CONNECTION_TIMEOUT_MS"       defaultValue="5000"/>
-    <variable name="DB_MAX_IDLE_TIME_S"             defaultValue="60"/>
-    <variable name="DB_REAP_TIME_S"                 defaultValue="180"/>
-    <variable name="DB_AGED_TIMEOUT_S"              defaultValue="3600"/>
+    <!-- DB connection pool — PRIMARY CHAOS KNOB.
+         Default pool size is tiny: exhausted by the first few concurrent
+         requests, producing HTTP 503 / connection-timeout errors.
+         Raise DB_MAX_POOL_SIZE to relieve connection pressure. -->
+    <variable name="DB_MAX_POOL_SIZE"               defaultValue="3"/>
+    <variable name="DB_MIN_POOL_SIZE"               defaultValue="1"/>
+    <!-- Short connection timeout: callers fail fast with a recognisable
+         "Connection wait timeout" error rather than hanging indefinitely. -->
+    <variable name="DB_CONNECTION_TIMEOUT_MS"       defaultValue="1000"/>
+    <variable name="DB_MAX_IDLE_TIME_S"             defaultValue="30"/>
+    <variable name="DB_REAP_TIME_S"                 defaultValue="60"/>
+    <variable name="DB_AGED_TIMEOUT_S"              defaultValue="600"/>
 
-    <!-- HTTP keep-alive -->
-    <!-- HTTP_PERSIST_TIMEOUT_S controls how long a keep-alive connection stays
-         open after the last response. Increasing this is the primary chaos knob
-         for HTTP-driven memory pressure: each live connection holds its last
-         response buffer in heap for up to this many seconds. Combined with
-         CHAOS_HTTP_LARGE_RESPONSE_ENABLED=true the effect is multiplicative. -->
-    <variable name="HTTP_MAX_KEEPALIVE_REQUESTS"    defaultValue="200"/>
-    <variable name="HTTP_PERSIST_TIMEOUT_S"         defaultValue="60"/>
+    <!-- HTTP keep-alive — standard defaults; not used as a chaos knob.
+         The failure scenario is connection pool exhaustion, not heap growth
+         from large response bodies held on keep-alive sockets. -->
+    <variable name="HTTP_MAX_KEEPALIVE_REQUESTS"    defaultValue="100"/>
+    <variable name="HTTP_PERSIST_TIMEOUT_S"         defaultValue="30"/>
 
-    <!-- HTTP response/request buffer size per connection (bytes).
-         Raising this beyond 32768 means Liberty pre-allocates larger NIO buffers
-         per socket, amplifying per-connection heap cost at scale. -->
-    <variable name="HTTP_RESPONSE_BUFFER_SIZE"      defaultValue="65536"/>
+    <!-- HTTP response buffer at Liberty default (32 KB) — no per-connection
+         heap amplification; memory must not be the limiting factor. -->
+    <variable name="HTTP_RESPONSE_BUFFER_SIZE"      defaultValue="32768"/>
 
     <!-- ============================================================
          HTTP / HTTPS endpoints — listens on ALL interfaces (host="*")
@@ -75,19 +77,17 @@
                   httpPort="${default.http.port}"
                   httpsPort="${default.https.port}">
         <tcpOptions soReuseAddr="true"/>
-        <!-- keepAliveEnabled=true (default); maxKeepAliveRequests controls
-             how many requests share a connection before it is closed.
-             responseBufferSize sets the NIO write buffer per connection;
-             raising it beyond the default 32 KB amplifies per-connection heap
-             cost, which compounds with the large-response chaos knob. -->
+        <!-- Standard keep-alive settings. responseBufferSize at the Liberty
+             default (32 KB) to avoid contributing to heap pressure. -->
         <httpOptions maxKeepAliveRequests="${HTTP_MAX_KEEPALIVE_REQUESTS}"
                      persistTimeout="${HTTP_PERSIST_TIMEOUT_S}"
                      responseBufferSize="${HTTP_RESPONSE_BUFFER_SIZE}"/>
     </httpEndpoint>
 
     <!-- ============================================================
-         Thread pool: deliberately under-provisioned default so that
-         high concurrency exposes thread starvation quickly.
+         Thread pool: capped at THREAD_POOL_MAX (default 20) so that
+         concurrent requests queue once all threads are busy waiting for
+         a DB connection, causing HTTP 503 thread-starvation errors.
          Raise THREAD_POOL_MAX env var to relieve pressure.
          ============================================================ -->
     <executor name="LibertyThreadPool"
@@ -96,9 +96,13 @@
 
     <!-- ============================================================
          JDBC DataSource — H2 embedded (dev/test) or PostgreSQL (prod).
-         Connection pool settings are the primary chaos knob:
-           - DB_MAX_POOL_SIZE low  → connection starvation
-           - DB_CONNECTION_TIMEOUT_MS short → fast rejection
+         Connection pool is the PRIMARY chaos knob:
+           - DB_MAX_POOL_SIZE=3  → exhausted by the first 3 concurrent
+             requests; all subsequent callers get a 503 after 1 second
+           - CHAOS_DB_LEAK_ENABLED=true → connections are never returned,
+             so the pool drains to zero after the first 3 requests
+           - CHAOS_DB_SLOW_QUERY_MS=500 → holds each connection for 500ms
+             extra, accelerating pool exhaustion under concurrent load
          ============================================================ -->
     <library id="h2Lib">
         <fileset dir="${shared.resource.dir}" includes="h2-*.jar"/>
@@ -121,12 +125,10 @@
 
         <!-- ============================================================
              Connection Pool Chaos Knobs
-             - maxPoolSize:        set LOW (e.g. 5) to trigger starvation
-             - minPoolSize:        eagerly open connections
-             - connectionTimeout:  how long threads wait for a connection (ms)
-             - reapTime:           how often to scan for idle connections (s)
-             - maxIdleTime:        close idle connections after this (s)
-             Default values are intentionally tight to show pressure fast.
+             - maxPoolSize=3:      exhausted after 3 concurrent requests
+             - connectionTimeout=1000ms: fast failure so 503s appear immediately
+             - CHAOS_DB_LEAK_ENABLED: connections are never returned (see app code)
+             - CHAOS_DB_SLOW_QUERY_MS=500: each query holds the connection longer
              ============================================================ -->
         <connectionManager
             maxPoolSize="${DB_MAX_POOL_SIZE}"
@@ -158,17 +160,18 @@
 
     <!-- ============================================================
          Logging — structured JSON for Kubernetes log aggregation.
-         traceSpecification raised to capture JVM-adjacent subsystems:
-           WAS.j2c     — JDBC connection pool events (acquire/release/timeout)
-           Threading   — Liberty executor / thread lifecycle
-           healthcenter — IBM Health Center JVM sampling agent events
+         traceSpecification raised to capture connection-pool subsystems:
+           WAS.j2c     — JDBC connection pool acquire/release/timeout events
+                         (key signal for connection exhaustion RCA)
+           com.ibm.ws.threading — Liberty executor thread lifecycle
+           com.ibm.ws.jca      — JCA/JDBC resource adapter events
          All other components remain at INFO to avoid log flooding.
          ============================================================ -->
     <logging
         messageFormat="json"
         consoleFormat="json"
         consoleLogLevel="INFO"
-        traceSpecification="*=info:WAS.j2c*=fine:com.ibm.ws.threading*=fine:com.ibm.ws.jca*=fine:com.ibm.ws.kernel.launch*=fine"
+        traceSpecification="*=info:WAS.j2c*=fine:com.ibm.ws.threading*=fine:com.ibm.ws.jca*=fine"
         maxFileSize="100"
         maxFiles="5"
         isoDateFormat="true"

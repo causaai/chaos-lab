@@ -22,45 +22,50 @@ metadata:
     app: liberty-perf
 data:
   # ── Thread pool ──────────────────────────────────────────
-  THREAD_POOL_CORE: "20"
-  THREAD_POOL_MAX: "200"
+  # Core/max kept low so HTTP request threads queue under concurrent load,
+  # producing HTTP 503s (thread-pool exhaustion) rather than OOM.
+  THREAD_POOL_CORE: "10"
+  THREAD_POOL_MAX: "20"
 
   # ── DB connection pool ───────────────────────────────────
-  # Reduce DB_MAX_POOL_SIZE to trigger connection starvation
-  DB_MAX_POOL_SIZE: "20"
-  DB_MIN_POOL_SIZE: "2"
-  DB_CONNECTION_TIMEOUT_MS: "5000"
-  DB_MAX_IDLE_TIME_S: "60"
-  DB_REAP_TIME_S: "180"
-  DB_AGED_TIMEOUT_S: "3600"
+  # PRIMARY CHAOS KNOB: pool deliberately tiny so connections are exhausted
+  # under moderate concurrent load, causing HTTP 503 / connection-timeout
+  # errors without any memory pressure.
+  DB_MAX_POOL_SIZE: "3"
+  DB_MIN_POOL_SIZE: "1"
+  # Short timeout so callers fail fast with a connection error (not OOM).
+  DB_CONNECTION_TIMEOUT_MS: "1000"
+  DB_MAX_IDLE_TIME_S: "30"
+  DB_REAP_TIME_S: "60"
+  DB_AGED_TIMEOUT_S: "600"
 
   # ── HTTP keep-alive ──────────────────────────────────────
-  # persistTimeout raised to 60s (from 30s) — connections linger longer,
-  # holding response buffers in heap for the full window.
-  HTTP_MAX_KEEPALIVE_REQUESTS: "200"
-  HTTP_PERSIST_TIMEOUT_S: "60"
-  # NIO write buffer per connection (bytes). Default Liberty is 32768.
-  # 65536 doubles per-connection heap cost; raise further to amplify pressure.
-  HTTP_RESPONSE_BUFFER_SIZE: "65536"
+  # persistTimeout kept at Liberty default (30s) — not used as a chaos knob
+  # here; the failure scenario is connection pool exhaustion, not heap growth.
+  HTTP_MAX_KEEPALIVE_REQUESTS: "100"
+  HTTP_PERSIST_TIMEOUT_S: "30"
+  # NIO write buffer kept at Liberty default (32 KB) to avoid contributing
+  # to heap pressure; the failure mode must be connection errors, not OOM.
+  HTTP_RESPONSE_BUFFER_SIZE: "32768"
 
-  # ── Chaos knobs (set to "true" to activate) ──────────────
-  # ── Primary scenario: HTTP large-response + keep-alive ───
-  # Each response padded with CHAOS_HTTP_LARGE_RESPONSE_KB KB of Base64 data.
-  # Combined with HTTP_PERSIST_TIMEOUT_S=60, live heap ≈
-  #   CONCURRENT_USERS × CHAOS_HTTP_LARGE_RESPONSE_KB KB × 2.33 (Base64 overhead)
-  # At 50 users × 256 KB × 2.33 ≈ ~30 MB of live heap per response cycle.
-  CHAOS_HTTP_LARGE_RESPONSE_ENABLED: "true"
-  CHAOS_HTTP_LARGE_RESPONSE_KB: "256"
+  # ── Chaos knobs ──────────────────────────────────────────
+  # HTTP large-response DISABLED: 256 KB per response × concurrent users
+  # exhausts the 384 MiB heap long before the DB pool runs dry.
+  # Keeping this off ensures the observed failure is connection errors,
+  # not GC pressure / OOM kills.
+  CHAOS_HTTP_LARGE_RESPONSE_ENABLED: "false"
+  CHAOS_HTTP_LARGE_RESPONSE_KB: "4"
 
-  # ── Secondary scenario: Connection leak ──────────────────
-  # Connection leak — connections are never returned to pool
-  CHAOS_DB_LEAK_ENABLED: "false"
-  # Slow query simulation (ms, 0=disabled)
-  CHAOS_DB_SLOW_QUERY_MS: "0"
-  # ── Tertiary scenario: background heap leak ───────────────
-  # Memory leak via unbounded response cache (independent of HTTP traffic)
+  # DB connection leak — connections are never returned to pool.
+  # Combined with DB_MAX_POOL_SIZE=3 this guarantees pool exhaustion within
+  # the first few requests, producing HTTP 503 connection-timeout errors.
+  CHAOS_DB_LEAK_ENABLED: "true"
+  # Slow query simulation adds latency so connections are held longer,
+  # accelerating pool exhaustion.
+  CHAOS_DB_SLOW_QUERY_MS: "500"
+  # Background heap leak DISABLED: we want connection errors, not OOM.
   CHAOS_MEMORY_CACHE_ENABLED: "false"
-  # Objects (64KB each) cached per transaction when cache is on
+  # Objects per tx kept at minimum — irrelevant when cache is disabled.
   CHAOS_MEMORY_OBJECTS_PER_TX: "1"
 ---
 # ============================================================
@@ -79,7 +84,7 @@ data:
   jvm.options: |
     # ── Verbose GC ──────────────────────────────────────────────────────────
     # OpenJ9 XML GC log: 4 rotating files, wraps every 20 000 GC cycles.
-    # Produces verbosegc.001.log … verbosegc.004.log under /logs.
+    # Retained for observability; should remain quiet under load (no OOM).
     -Xverbosegclog:/logs/verbosegc.%seq.log,4,20000
 
     # ── JIT compilation trace ────────────────────────────────────────────────
@@ -90,12 +95,16 @@ data:
     # Prints one line to stdout for every class dynamically loaded/unloaded.
     -verbose:dynload
 
+    # ── Shared class cache — accelerates Liberty startup ────────────────────
+    # Caches AOT-compiled classes so pods start within the probe window.
+    # Eliminates JIT-throttle startup kills — the only failure at runtime
+    # must be HTTP connection pool exhaustion, not startup timeouts.
+    -Xshareclasses:name=liberty,cacheDir=/tmp/sharedcache
+    -Xscmx64m
+
     # ── Thread dump on SIGQUIT / crash / abort ───────────────────────────────
     # Trigger: oc exec -n chaos-test <pod> -- kill -3 1
     -Xdump:java:events=user+gpf+abort,file=/dumps/javacore.%Y%m%d.%H%M%S.%pid.txt
-
-    # ── Heap dump on OutOfMemoryError ────────────────────────────────────────
-    -Xdump:heap:events=systhrow+throw,filter=java/lang/OutOfMemoryError,file=/dumps/heapdump.%Y%m%d.%H%M%S.%pid.phd
 ---
 # ============================================================
 # Deployment — main application (3 replicas)
@@ -154,8 +163,7 @@ spec:
             - name: JAVA_TOOL_OPTIONS
               value: >-
                 -XX:+UseContainerSupport
-                -XX:MaxRAMPercentage=75
-                -Xdump:heap:events=systhrow+throw,filter=java/lang/OutOfMemoryError,file=/dumps/heapdump.%Y%m%d.%H%M%S.%pid.phd
+                -XX:MaxRAMPercentage=60
                 -Dfile.encoding=UTF-8
             - name: POD_NAME
               valueFrom:
@@ -167,19 +175,21 @@ spec:
                   fieldPath: metadata.namespace
           resources:
             requests:
-              memory: "256Mi"
-              cpu: "250m"
-            limits:
               memory: "512Mi"
-              cpu: "1000m"
-          # Startup probe — give Liberty up to 90s to start
+              cpu: "500m"
+            limits:
+              memory: "1536Mi"
+              cpu: "2000m"
+          # Startup probe — 3 minutes (36 × 5s) to let Liberty fully start
+          # under adequate CPU, eliminating JIT-throttle startup-probe kills
+          # so the only observable failure is HTTP connection errors at runtime.
           startupProbe:
             httpGet:
               path: /health/started
               port: 9080
-            failureThreshold: 18
+            failureThreshold: 36
             periodSeconds: 5
-            timeoutSeconds: 3
+            timeoutSeconds: 5
           # Liveness probe — restart if heap > 90%
           livenessProbe:
             httpGet:
